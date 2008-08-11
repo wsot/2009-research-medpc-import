@@ -10,6 +10,8 @@ namespace MedPC_Import
     {
         private Office.CommandBar toolbar;
         private Office.CommandBarButton importButton;
+        string xmlFilePath;
+        string dataFilePath;
 
         private void ThisAddIn_Startup(object sender, System.EventArgs e)
         {
@@ -41,6 +43,10 @@ namespace MedPC_Import
         
         #endregion
 
+        /**
+         * AddToolbar
+         * Adds the toolbar and button to Excel
+         **/
         private void AddToolbar()
         {
             if (this.toolbar == null)
@@ -58,7 +64,8 @@ namespace MedPC_Import
                 importButton.Click += new Microsoft.Office.Core._CommandBarButtonEvents_ClickEventHandler(importButton_click);
                 importButton.Picture = getImage();
 
-
+                dataFilePath = "c:\\MED-PC IV\\Data";
+                xmlFilePath = "c:\\MED-PC IV\\MPC";
             }
             catch (Exception e)
             {
@@ -66,24 +73,33 @@ namespace MedPC_Import
             }
         }
         
+        /**
+         * importButton_click
+         * Triggered when the 'Import data' button is clicked
+         **/
         private void importButton_click(Office.CommandBarButton ctrl, ref bool cancel)
         {
             FileParser theParser;
 
+            //Open file dialog to allow the user to select files
             OpenFileDialog theDialog = new OpenFileDialog();
-            theDialog.InitialDirectory = "c:\\MED-PC IV\\Data";
+            if (System.IO.File.Exists(dataFilePath))
+                theDialog.InitialDirectory = dataFilePath;
             //theDialog.RestoreDirectory = true;
+            theDialog.Multiselect = true; //allow selection of multiple files
 
             if (theDialog.ShowDialog() == DialogResult.OK)
             {
                 try
                 {
-                    Excel.Workbook theWorkbook = this.Application.Workbooks.Add(Excel.XlWBATemplate.xlWBATWorksheet);
-                    /*theWorkbook.Worksheets.Add(Type.Missing, Type.Missing, Type.Missing, Microsoft.Office.Interop.Excel.XlSheetType.xlWorksheet);*/
-
-                    theParser = new FileParser(theDialog.FileName, theWorkbook);
-                    theParser.Parse();
-                    theParser = null;
+                    
+                    //run the parser on each file selected
+                    foreach (string fileName in theDialog.FileNames)
+                    {
+                        theParser = new FileParser(fileName);
+                        theParser.Parse(this.Application, ref xmlFilePath);
+                        theParser = null;
+                    }
                 }
                 catch (Exception e)
                 {
@@ -110,8 +126,6 @@ namespace MedPC_Import
             }
             return tempImage;
         }
-
-
     }
 }
 

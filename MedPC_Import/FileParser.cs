@@ -12,49 +12,103 @@ namespace MedPC_Import
     {
         System.IO.StreamReader stream;
         Excel.Workbook wb;
-        string msn;
+        string msn; //MSN is the name of the program which was run - used to locate the XML description file
+        string dataFilename; //the name of the data file taken from the file header; stored to put in each excel output file
+        string inputFilename; //the actual filename of the file being parsed; used for location to which file should be saved.
+        string line; //the current line in the file being parsed
+        string xmlFilePath; //path where the XML files can be found
+        int headerCount; //used to track the number of headers found in the current file
         System.Collections.Hashtable xmlVars;
         System.Collections.Hashtable xmlArrays;
+        Excel.Application app;
 
-        public FileParser(string theFilename, Excel.Workbook theWorkbook)
+        public FileParser(string theFilename)
         {
+            inputFilename = theFilename;
             stream = new System.IO.StreamReader(theFilename);
-            wb = theWorkbook;
         }
 
-        public FileParser(System.IO.StreamReader theStream, Excel.Workbook theWorkbook)
+        public void Parse(Excel.Application theApp, ref string theXmlPath)
         {
-            stream = theStream;
-            wb = theWorkbook;
+            xmlFilePath = theXmlPath;
+            app = theApp;
+            
+            while (!stream.EndOfStream)
+            {
+                xmlVars = new System.Collections.Hashtable();
+                xmlArrays = new System.Collections.Hashtable();
+
+                line = stream.ReadLine();
+                string outputFilename;
+
+                parseHeader();
+                if (!readXml())
+                {
+                    MessageBox.Show(String.Concat("Reading file '", inputFilename, "' failed - XML descriptor not found"));
+                    break;
+                }
+                parseVariables();
+
+                xmlVars = null;
+                xmlArrays = null;
+
+                if (wb != null)
+                {
+                    if (headerCount > 1)
+                    {
+                        outputFilename = String.Concat(inputFilename, '_', Convert.ToString(headerCount), ".xls");
+                    }
+                    else
+                    {
+                        outputFilename = String.Concat(inputFilename, ".xls");
+                    }
+                    try
+                    {
+                        wb.SaveAs(outputFilename, Type.Missing, Type.Missing, Type.Missing, Type.Missing, Type.Missing, Excel.XlSaveAsAccessMode.xlExclusive, Type.Missing, Type.Missing, Type.Missing, Type.Missing, Type.Missing);
+                    }
+                    catch (Exception e)
+                    {
+//                        MessageBox.Show(e.Message + "\n" + e.StackTrace);
+                    }
+
+                }
+            }
+
+            app = null;
+            stream.Close();
+            theXmlPath = xmlFilePath;
         }
 
-        public void Parse()
-        {
-            xmlVars = new System.Collections.Hashtable();
-            xmlArrays = new System.Collections.Hashtable();
-
-            parseHeader();
-            readXml();
-            parseVariables();
-        }
-
+        /***
+         * Parses the MedPC header data from an output file
+         **/
         private void parseHeader()
         {
-            Excel.Worksheet wsOverview = (Excel.Worksheet) wb.Worksheets.Add(Type.Missing, Type.Missing, Type.Missing, Excel.XlSheetType.xlWorksheet);
+            wb = app.Workbooks.Add(Excel.XlWBATemplate.xlWBATWorksheet); //create new workbook for the data
+            Excel.Worksheet wsOverview = (Excel.Worksheet)wb.Worksheets.Add(Type.Missing, Type.Missing, Type.Missing, Excel.XlSheetType.xlWorksheet); //create a worksheet for header information
             wsOverview.Name = "Overview";
 
             int colonPos = 0, rowNum = 1;
             string label, value;
 
-            string line;
-
-            while ((line = stream.ReadLine()) != null)
+            while (!stream.EndOfStream)
             {
                 colonPos = line.IndexOf(':');
                 if (colonPos != -1)
                 {
+                    if (rowNum == 1) headerCount++;
+
                     label = line.Substring(0, colonPos);
                     value = line.Substring(colonPos + 1, line.Length - colonPos - 1).Trim();
+                    if (label.Equals("File"))
+                    {
+                        dataFilename = value;
+                    } else if (rowNum == 1) {
+                        wsOverview.get_Range(String.Concat('A', rowNum.ToString()), Type.Missing).Value2 = "File";
+                        wsOverview.get_Range(String.Concat('B', rowNum.ToString()), Type.Missing).Value2 = dataFilename;
+                        rowNum++;
+                    }
+
                     wsOverview.get_Range(String.Concat('A', rowNum.ToString()), Type.Missing).Value2 = label;
                     wsOverview.get_Range(String.Concat('B', rowNum.ToString()), Type.Missing).Value2 = value;
                     rowNum++;
@@ -64,9 +118,14 @@ namespace MedPC_Import
                         break;
                     }
                 }
+                line = stream.ReadLine();
             }
         }
 
+        /**
+         * Parse variables and arrays out of the file.
+         * Only those variable names matching an entry in xmlVars and array names matching an entry is xmlArrays will be includeded
+         */
         private void parseVariables()
         {
             try
@@ -77,54 +136,49 @@ namespace MedPC_Import
                 string label, value;
                 value = "";
 
-                Regex varStartRegex = new Regex(@"^\s*([A-Za-z]):\s*(?:([0-9\.]+)\s*)?$", RegexOptions.IgnoreCase);
+                Regex varStartRegex = new Regex(@"^\s*([A-Za-z]):\s*(?:(-?[0-9\.]+)\s*)?$", RegexOptions.IgnoreCase); //regex will match start  of variable or array - the second group only captures for variable, not array
 
-                string line;
                 line = stream.ReadLine();
-                while (line != null)
+                while (!stream.EndOfStream && varStartRegex.IsMatch(line)) //match -> a variable name (and possibly value) is present on this line
                 {
-                    if (varStartRegex.IsMatch(line)) //match -> a variable name (and possibly value) is present on this line
+                    Match theMatch = varStartRegex.Match(line);
+                    label = theMatch.Groups[1].Captures[0].Value;
+
+                    if (theMatch.Groups[2].Captures.Count > 0) //if >0 then variable value on same line. Otherwise it is an array.
                     {
-                        Match theMatch = varStartRegex.Match(line);
-                        label = theMatch.Groups[1].Captures[0].Value;
+                        label = theMatch.Groups[1].Value;
+                        value = theMatch.Groups[2].Value;
 
-                        if (theMatch.Groups[2].Captures.Count > 0) //if >0 then variable value on same line. Otherwise it is an array.\
+                        if (xmlVars.ContainsKey(label)) //check variable is in list of vars to output
                         {
-                            label = theMatch.Groups[1].Value;
-                            value = theMatch.Groups[2].Value;
-
-                            if (xmlVars.ContainsKey(label))
+                            if (wsVars == null) //if there is no 'variables' worksheet, create it.
                             {
-                                if (wsVars == null)
-                                {
-                                    wsVars = (Excel.Worksheet)wb.Worksheets.Add(Type.Missing, Type.Missing, Type.Missing, Excel.XlSheetType.xlWorksheet);
-                                    wsVars.Name = "Variables";
-                                }
-                                wsVars.get_Range(String.Concat('A', rowNum.ToString()), Type.Missing).Value2 = ((MPCVariable)xmlVars[label]).outputName;
-                                wsVars.get_Range(String.Concat('B', rowNum.ToString()), Type.Missing).Value2 = value;
-                                wsVars.get_Range(String.Concat('C', rowNum.ToString()), Type.Missing).Value2 = ((MPCVariable)xmlVars[label]).summary;
-                                rowNum++;
+                                wsVars = (Excel.Worksheet)wb.Worksheets.Add(Type.Missing, Type.Missing, Type.Missing, Excel.XlSheetType.xlWorksheet);
+                                wsVars.Name = "Variables";
                             }
-
-                            line = stream.ReadLine();
+                            //put variable in the worksheet
+                            wsVars.get_Range(String.Concat('A', rowNum.ToString()), Type.Missing).Value2 = ((MPCVariable)xmlVars[label]).outputName;
+                            wsVars.get_Range(String.Concat('B', rowNum.ToString()), Type.Missing).Value2 = value;
+                            wsVars.get_Range(String.Concat('C', rowNum.ToString()), Type.Missing).Value2 = ((MPCVariable)xmlVars[label]).summary;
+                            rowNum++;
                         }
-                        else
-                        {
-                            //line contains beginning of an array
-                            label = theMatch.Groups[1].Value;
-                            if (xmlArrays.ContainsKey(label))
-                            {
-                                readDataArray(ref line, label);
-                            }
-                            else
-                            {
-                                line = stream.ReadLine();
-                            }
-                        }
+
+                        line = stream.ReadLine();
                     }
                     else
                     {
-                        line = stream.ReadLine();
+                        //line contains beginning of an array
+                        label = theMatch.Groups[1].Value;
+                        if (xmlArrays.ContainsKey(label)) //check if the array is one that should be output
+                        {
+                            readDataArray(label);
+                        }
+                        else
+                        {
+                            //array is not one to be output, so skip to end of array (actually comes back with line = the line of text after the end of the array)
+                            line = stream.ReadLine();
+                            skipArray();
+                        }
                     }
                 }
             }
@@ -134,7 +188,10 @@ namespace MedPC_Import
             }
         }
 
-        private void readDataArray(ref string line, string label)
+        /**
+         * Read data from the array and output onto a new worksheet specifically for the array
+         */
+        private void readDataArray(string label)
         {
             int itemNum = 0;
             MPCArray theArray = (MPCArray)xmlArrays[label];
@@ -154,13 +211,14 @@ namespace MedPC_Import
             outputColHeaders(theArray, arrWs);
             int colNum, rowNum;
 
+            //Regex matches a five-column output. If not 5-column, this will break.
             Regex arrayValuesRegex = new Regex(@"^\s*(\d+):\s*(-?[0-9\.]+)\s*(?:(-?[0-9\.]+)\s*)?(?:(-?[0-9\.]+)\s*)?(?:(-?[0-9\.]+)\s*)?(?:(-?[0-9\.]+)\s*)?$", RegexOptions.IgnoreCase);
 
             line = stream.ReadLine();
-            while (line != null && arrayValuesRegex.IsMatch(line))
+            while (!stream.EndOfStream && arrayValuesRegex.IsMatch(line)) //check we are still in an array and not at end of file
             {
                 Match theMatch = arrayValuesRegex.Match(line);
-                for (int i = 2; i < theMatch.Groups.Count; i++)
+                for (int i = 2; i < theMatch.Groups.Count; i++) //output data for each capture (which can be <5 if we are on the last line of the array)
                 {
                     colNum = (itemNum % columnCount);
                     rowNum = (itemNum / columnCount) + 2;
@@ -187,107 +245,154 @@ namespace MedPC_Import
             }
         }
 
-        private void readXml()
+        /**
+         * Read the XML file associated with the program run. If the XML file is missing, then will ask for where to locate it
+         */
+        private bool readXml()
         {
+            bool fileLoaded = false;
+
             System.Xml.XmlDocument xmlDoc = new System.Xml.XmlDocument();
             try
             {
-                xmlDoc.Load(String.Concat("c:\\MED-PC IV\\MPC\\", msn, ".MPC.xml"));
+                //check default location C:\MED-PC IV\MPC\<msn>.MPC.xml
+                if (System.IO.File.Exists(String.Concat(xmlFilePath, System.IO.Path.DirectorySeparatorChar, msn, ".MPC.xml")))
+                {
+                    xmlDoc.Load(String.Concat(xmlFilePath, System.IO.Path.DirectorySeparatorChar, msn, ".MPC.xml"));
+                    fileLoaded = true;
+                }
+
+                //check input file location for <msn>.MPC.xml
+                if (System.IO.File.Exists(String.Concat(System.IO.Path.GetDirectoryName(inputFilename), System.IO.Path.DirectorySeparatorChar, msn, ".MPC.xml")))
+                {
+                    xmlDoc.Load(String.Concat(System.IO.Path.GetDirectoryName(inputFilename), System.IO.Path.DirectorySeparatorChar, msn, ".MPC.xml"));
+                    fileLoaded = true;
+                }
+
             }
             catch (System.IO.FileNotFoundException fnfe)
+            { }
+            catch (System.Xml.XmlException xmle)
+            { }
+            catch (System.IO.IOException ioe)
+            { }
+
+            if (!fileLoaded)
             {
+                //didn't exist in default location - ask user where the file is located
                 OpenFileDialog theDialog = new OpenFileDialog();
-                theDialog.InitialDirectory = "c:\\MED-PC IV\\MPC";
-                //theDialog.RestoreDirectory = true;
+                if (System.IO.File.Exists(xmlFilePath))
+                    theDialog.InitialDirectory = xmlFilePath;
 
                 if (theDialog.ShowDialog() == DialogResult.OK)
                 {
                     try
                     {
                         xmlDoc.Load(theDialog.FileName);
+                        xmlFilePath = System.IO.Path.GetDirectoryName(theDialog.FileName);
+                        fileLoaded = true;
                     }
+                    catch (System.IO.FileNotFoundException fnfe)
+                    { }
+                    catch (System.Xml.XmlException xmle)
+                    { }
+                    catch (System.IO.IOException ioe)
+                    { }
                     catch (Exception e)
                     {
                         MessageBox.Show(e.Message + "\n" + e.StackTrace);
-                        return;
+                        fileLoaded = false;
                     }
                 }
             }
 
-            try
+            if (fileLoaded)
             {
-                System.Xml.XmlNodeList nodes = xmlDoc.SelectNodes("/program/variable");
-                foreach (System.Xml.XmlNode node in nodes)
+                try
                 {
-                    if (node.Attributes["outputName"] != null)
+                    //Process the variables in the file
+                    System.Xml.XmlNodeList nodes = xmlDoc.SelectNodes("/program/variable");
+                    foreach (System.Xml.XmlNode node in nodes)
                     {
-                        MPCVariable theVar = new MPCVariable();
-                        theVar.label = node.Attributes["name"].Value;
-                        theVar.summary = node.Attributes["summary"].Value;
-                        theVar.outputName = node.Attributes["outputName"].Value;
-                        xmlVars.Add(theVar.label, theVar);
-                    }
-                }
-
-                nodes = xmlDoc.SelectNodes("program/array");
-                foreach (System.Xml.XmlNode node in nodes)
-                {
-                    if (node.Attributes["name"] != null)
-                    {
-                        bool includeInOutput = false;
-                        MPCArray theArray = new MPCArray();
-                        int outputColNum = 0;
-                        theArray.name = node.Attributes["name"].Value;
-                        theArray.summary = node.Attributes["summary"].Value;
+                        //if outputName exists, then the variable should be included
                         if (node.Attributes["outputName"] != null)
                         {
-                            theArray.outputName = node.Attributes["outputName"].Value;
-                            if (node.Attributes["outputStyle"] != null)
-                            {
-                                //if an output style (cols or rows) is specified, use it. cols = each now data 'row' is a new column; rows = each new data 'row' is a row.
-                                theArray.outputStyle = node.Attributes["outputStyle"].Value;
-                            }
-                            else 
-                            {
-                                //by default, output so each data 'line' is on a new row
-                                theArray.outputStyle = "rows";
-                            }
+                            MPCVariable theVar = new MPCVariable();
+                            theVar.label = node.Attributes["name"].Value;
+                            theVar.summary = node.Attributes["summary"].Value;
+                            theVar.outputName = node.Attributes["outputName"].Value;
+                            xmlVars.Add(theVar.label, theVar);
                         }
-                        theArray.columns = new System.Collections.ArrayList();
+                    }
 
-                        foreach (System.Xml.XmlNode columnNode in node.ChildNodes)
+                    nodes = xmlDoc.SelectNodes("program/array");
+                    foreach (System.Xml.XmlNode node in nodes)
+                    {
+                        if (node.Attributes["name"] != null)
                         {
-                            MPCArrayColumn theColumn = new MPCArrayColumn();
-                            theColumn.name = columnNode.Attributes["name"].Value;
-                            if (columnNode.Attributes["outputName"] != null)
+                            bool includeInOutput = false;
+                            MPCArray theArray = new MPCArray();
+                            int outputColNum = 0;
+                            theArray.name = node.Attributes["name"].Value;
+                            theArray.summary = node.Attributes["summary"].Value;
+                            //if outputName exists, then the array should be included
+                            if (node.Attributes["outputName"] != null)
                             {
-                                outputColNum++;
-                                theColumn.outputName = columnNode.Attributes["outputName"].Value;
-                                theColumn.outputColNum = outputColNum;
-                                theColumn.includeInOutput = true;
-                                includeInOutput = true;
+                                theArray.outputName = node.Attributes["outputName"].Value;
+                                if (node.Attributes["outputStyle"] != null)
+                                {
+                                    //if an output style (cols or rows) is specified, use it. cols = each now data 'row' is a new column; rows = each new data 'row' is a row.
+                                    theArray.outputStyle = node.Attributes["outputStyle"].Value;
+                                }
+                                else
+                                {
+                                    //by default, output so each data 'line' is on a new row
+                                    theArray.outputStyle = "rows";
+                                }
                             }
-                            else
-                            {
-                                theColumn.includeInOutput = false;
-                            }
-                            theColumn.summary = columnNode.Attributes["summary"].Value;
-                            theArray.columns.Add(theColumn);
-                        }
+                            theArray.columns = new System.Collections.ArrayList();
 
-                        if (includeInOutput)
-                        {
-                            xmlArrays.Add(theArray.name, theArray);
+                            //create the list of columns in the array
+                            foreach (System.Xml.XmlNode columnNode in node.ChildNodes)
+                            {
+                                MPCArrayColumn theColumn = new MPCArrayColumn();
+                                theColumn.name = columnNode.Attributes["name"].Value;
+                                if (columnNode.Attributes["outputName"] != null)
+                                {
+                                    outputColNum++;
+                                    theColumn.outputName = columnNode.Attributes["outputName"].Value;
+                                    theColumn.outputColNum = outputColNum;
+                                    theColumn.includeInOutput = true;
+                                    includeInOutput = true;
+                                }
+                                else
+                                {
+                                    theColumn.includeInOutput = false;
+                                }
+                                theColumn.summary = columnNode.Attributes["summary"].Value;
+                                theArray.columns.Add(theColumn);
+                            }
+
+                            if (includeInOutput)
+                            {
+                                xmlArrays.Add(theArray.name, theArray);
+                            }
                         }
                     }
                 }
+                catch (Exception e)
+                {
+                    MessageBox.Show(e.Message + "\n" + e.StackTrace);
+                    fileLoaded = false;
+                }
             }
-            catch (Exception e)
-            {
-                MessageBox.Show(e.Message + "\n" + e.StackTrace);
-            }
+
+            return fileLoaded;
         }
 
+        /**
+         * Write out the column headers for the MPCArray to the provided worksheet
+         **/
         private void outputColHeaders(MPCArray theArray, Excel.Worksheet ws)
         {
             int colNum = -1;
@@ -319,6 +424,9 @@ namespace MedPC_Import
             }
         }
 
+        /**
+         * Convert a column number to a textual column name
+         **/
         private string getColName(int colNum)
         {
             string letterList = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -331,6 +439,19 @@ namespace MedPC_Import
             }
 
             return colName;
+        }
+
+        /**
+         * Skip to the end of an array in a MedPC data file
+         **/
+        private void skipArray()
+        {
+            Regex arrayLineRegex = new Regex(@"^\s*(\d+):\s*(-?[0-9\.]+)\s*(?:(-?[0-9\.]+)\s*)?(?:(-?[0-9\.]+)\s*)?(?:(-?[0-9\.]+)\s*)?(?:(-?[0-9\.]+)\s*)?$", RegexOptions.IgnoreCase);
+
+            while (stream.EndOfStream == false && arrayLineRegex.IsMatch(line))
+            {
+                line = stream.ReadLine();
+            }
         }
     }
 }
