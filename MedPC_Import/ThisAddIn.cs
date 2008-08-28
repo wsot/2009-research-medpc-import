@@ -59,6 +59,12 @@ namespace MedPC_Import
             try
             {
                 importButton = (Office.CommandBarButton)toolbar.Controls.Add(Office.MsoControlType.msoControlButton, missing, missing, missing, missing);
+                importButton.Caption = "Quick-import data";
+                importButton.Tag = "MPC_Import";
+                importButton.Click += new Microsoft.Office.Core._CommandBarButtonEvents_ClickEventHandler(quickImportButton_click);
+                importButton.Picture = getImage();
+
+                importButton = (Office.CommandBarButton)toolbar.Controls.Add(Office.MsoControlType.msoControlButton, missing, missing, missing, missing);
                 importButton.Caption = "Import data";
                 importButton.Tag = "MPC_Import";
                 importButton.Click += new Microsoft.Office.Core._CommandBarButtonEvents_ClickEventHandler(importButton_click);
@@ -72,12 +78,12 @@ namespace MedPC_Import
                 MessageBox.Show(e.Message);
             }
         }
-        
+
         /**
-         * importButton_click
-         * Triggered when the 'Import data' button is clicked
-         **/
-        private void importButton_click(Office.CommandBarButton ctrl, ref bool cancel)
+ * importButton_click
+ * Triggered when the 'Import data' button is clicked
+ **/
+        private void quickImportButton_click(Office.CommandBarButton ctrl, ref bool cancel)
         {
             FileParser theParser;
 
@@ -106,6 +112,61 @@ namespace MedPC_Import
                     MessageBox.Show(e.Message);
                 }
             }
+        }
+
+        /**
+         * importButton_click
+         * Triggered when the 'Import data' button is clicked
+         **/
+        private void importButton_click(Office.CommandBarButton ctrl, ref bool cancel)
+        {
+
+            ImportForm impForm = new ImportForm(dataFilePath, xmlFilePath);
+            if (impForm.ShowDialog() == DialogResult.OK)
+            {
+                ListBox.ObjectCollection files;
+                files = ((ListBox)impForm.Controls[impForm.Controls.IndexOfKey("fileList")]).Items;
+                if (files.Count > 0)
+                {
+                    FileParser theParser;
+                    foreach (string fileName in files)
+                    {
+                        theParser = new FileParser(fileName);
+                        theParser.Parse(this.Application, ref xmlFilePath);
+                        theParser = null;
+                    }
+                }
+            }
+            impForm.Dispose();
+            /**
+            FileParser theParser;
+
+            //Open file dialog to allow the user to select files
+            OpenFileDialog theDialog = new OpenFileDialog();
+            if (System.IO.File.Exists(dataFilePath))
+                theDialog.InitialDirectory = dataFilePath;
+            //theDialog.RestoreDirectory = true;
+            theDialog.Multiselect = true; //allow selection of multiple files
+
+            if (theDialog.ShowDialog() == DialogResult.OK)
+            {
+                try
+                {
+                    
+                    //run the parser on each file selected
+                    foreach (string fileName in theDialog.FileNames)
+                    {
+                        theParser = new FileParser(fileName);
+                        theParser.Parse(this.Application, ref xmlFilePath);
+                        theParser = null;
+                    }
+                }
+                catch (Exception e)
+                {
+                    MessageBox.Show(e.Message);
+                }
+            }
+             **/
         }
 
         private stdole.IPictureDisp getImage()
